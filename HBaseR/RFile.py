@@ -5,8 +5,10 @@
 
 import os
 import struct
-
-class RFile:
+from HBaseR.RByteRange import RByteRange
+from HBaseR.RUnparsedBlob import RUnparsedBlob
+from HBaseR.RKey import RKey, RKeyHeader, RKeyData
+class RFile( RByteRange ):
     # Handles loading a file. Provides simple iterators to walk through the
     # object
 
@@ -20,6 +22,10 @@ class RFile:
     def open( self, fileName ):
         # opens a file, loads the header
         fh = open( fileName, 'r' )
+        initialRootHeader = ">4si"
+        ( rootKey, fVersion ) = self.unpackFromFD( fh, initialRootHeader )
+        if ( rootKey != "root" ):
+            raise RuntimeError, "The file's header doesn't match 'root'. Corrupt File?"
 
         # Description from http://root.cern.ch/root/html/TFile.html
 
@@ -44,11 +50,6 @@ class RFile:
         # note: R**T always uses big-endian
         # need to pull out the first bit of the header to get fVersion, which determines    
         # if it is a "big" or "small" file (why don't they just make all files big?)
-        initialRootHeader = ">4si"
-        ( rootKey, fVersion ) = self.unpackFromFD( fh, initialRootHeader )
-        if ( rootKey != "root" ):
-            raise RuntimeError, "The file's header doesn't match 'root'. Corrupt File?"
-
         if fVersion < 1000000:
             # < 2GB struct format:
             rootHeader = ">11i"
@@ -62,21 +63,37 @@ class RFile:
           fNbytesFree, nfree, fNbytesName,
           fUnits, fcompress, fSeekInfo, 
           fNbytesInfo, fUUID ) = self.unpackFromFD( fh, rootHeader )
+        headerInfo = { 'rootKey'    : rootKey, 
+                       'fVersion'   : fVersion, 
+                       'fBegin'     : fBegin,
+                       'fEnd'       : fEnd,
+                       'fSeekFree'  : fSeekFree,
+                       'fNbytesFree': fNbytesFree,
+                       'nfree'      : nfree,
+                       'fNbytesName': fNbytesName,
+                       'fUnits'     : fUnits,
+                       'fcompress'  : fcompress,
+                       'fSeekInfo'  : fSeekInfo,
+                       'fNbytesInfo': fNbytesInfo,
+                       'fUUID'      : fUUID }
 
-        print  ( fBegin, fEnd, fSeekFree, \
-          fNbytesFree, nfree, fNbytesName,\
-          fUnits, fcompress, fSeekInfo, \
-          fNbytesInfo, fUUID ) 
-
+        RByteRange.__init__( self, 0, fEnd, fh )
+        self.header = RFileHeader( data = headerInfo )
+        self.header.setByteRange( 0, fh.tell() )
+        self.addChildRange( self.header )
+        self.padding = RUnparsedBlob( fh.tell() + 1, fEnd )
+        self.addChildRange( self.padding )
+    def loadChildren( self ):
+        # get the file handle
+        fh = self.getFileHandleFromByteRange()
         # seek to fBegin to start reading keys
-        fh.seek( fBegin )
-        position = fBegin
-
+        position = self.header.data['fBegin']
+        fh.seek( position )
         initialKeyHeader  = ">ihiihh"
         smallKeyHeader  = ">iib"
         bigKeyHeader  = ">QQb"
 
-        while ( position < fEnd ):
+        while ( position < self.header.data['fEnd'] ):
             # Another thing R**T does that sucks. Instead of having all the 
             # fixed length bits of the header together, it intersperses fixed
             # length fields describing what the next variable length field is
@@ -108,8 +125,8 @@ class RFile:
 #            print "%s - %s -  %s " % (className, objName, objTitle )
             
             # Do some weird overrides http://root.cern.ch/root/html/src/TFile.cxx.html#1354
-            if (position == fSeekFree) : className = "FreeSegments"
-            if (position == fSeekInfo) : className = "StreamerInfo"
+            if (position == self.header.data['fSeekFree']) : className = "FreeSegments"
+            if (position == self.header.data['fSeekInfo']) : className = "StreamerInfo"
 #            if (position == seekKeys)  : className = "KeysList"
 
             # Store information about the key
@@ -119,12 +136,25 @@ class RFile:
                         "objTitle" : objTitle,
                         "keyBytes" : keyBytes,
                         "cycle"    : cycle }
+            keyContainer = RKey( position, position + keyBytes -1 )
+            self.padding.addChildRange( keyContainer )
 
+            keyHeader    = RKeyHeader( data = keyInfo )
+            keyData      = RKeyData( fh.tell() + 1, position + keyBytes -1 )
+
+            keyHeader.setByteRange( position, fh.tell() )
+
+            keyContainer.setHeader( keyHeader )
+            keyContainer.setData( keyData )
             self.keys.append( keyInfo )
 
             # seek forward to the next key
             position += keyBytes
             fh.seek( position )
+
+        # Now that we've loaded all the children, fill in any gaps with placeholder byteranges
+        for blankSpace in myfile.getEmptyRanges():
+            self.padding.addChildRange( blankSpace )
 
     def unpackFromFD( self, handle, pattern ):
         # helper function to read structs out of a file
@@ -132,7 +162,15 @@ class RFile:
         buffer     = handle.read( sizeNeeded )
         return  struct.unpack( pattern, buffer )
 
+class RFileHeader( RByteRange ):
+    def __init__(self, data ):
+        self.data = data
+
 if __name__ == '__main__':
     import os.path    
     myfile = RFile()
     myfile.open( os.path.join( os.path.dirname( __file__ ), "..", "test_file.root") )
+    myfile.loadChildren()
+    #myfile.dumpTree()
+    #for line in myfile.getByteMapping():
+    #    print line
