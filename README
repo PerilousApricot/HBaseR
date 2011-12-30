@@ -1,0 +1,3 @@
+Code to ingest root files into hbase. Uses no ROOT crap because I don't want
+to link 300GB of libraries (and some HTML5 implementation of something or
+another) to read objects out of a file.
