@@ -8,25 +8,35 @@
 # |THeader |TKey                       |
 # |THeader |TKeyHeader|THistogram      |
 
+import weakref
 
 class RByteRange:
 
-    def __init__( self ):
-        self.children = []
-       
-    def __init__( self, startByte, endByte, fh = None ):
+    def __init__( self, owner, startByte = None, endByte = None, fh = None ):
+        print owner
         if startByte > endByte:
-            raise RuntimeError, "startByte > endByte. This is no good"
+            raise RuntimeError, "startByte > endByte (%s > %s)" % (startByte, endByte )
 
-        self.startByte = startByte
-        self.endByte   = endByte
+        if ( startByte == None ) != ( endByte == None ):
+            raise RuntimeError, "Need to set both start and endbyte simultaneously"
+
+        if ( startByte != None ):
+            self.startByte = startByte
+            self.endByte   = endByte
         # TODO: need to make this into an interval tree
         self.children  = []
         self.parent    = None
+        self.owner     = weakref.ref( owner )
 
         if fh:
             self.fh = fh
     
+    def getOwner( self ):
+        if self.owner() != None:
+            return self.owner()
+        else:
+            raise RuntimeError, "Owner of the RByteRange has been reaped"
+
     def setByteRange( self, startByte, endByte ):
         if hasattr( self, 'startByte' ) or hasattr( self, 'endByte' ):
             raise RuntimeError, "Can't change an existing byterange. Get it right the first time"
@@ -61,7 +71,13 @@ class RByteRange:
             if hasattr( self, 'parent' ) and self.parent:
                 return self.parent.getFileHandleFromByteRange()
             else:
-                raise RuntimeError, "Couldn't find a filehandle"
+                if hasattr( self, 'fileName' ):
+                    return open( self.fileName, 'rb' )
+                else:
+                    raise RuntimeError, "Couldn't find a filehandle"
+
+    def setFileName( self, fileName ):
+        self.fileName = fileName
 
     def getEmptyRanges( self ):
         # returns the empty ranges in a given byterange.
@@ -100,21 +116,11 @@ class RByteRange:
             return retval
         else:
             return [[ self.startByte, self.endByte, self ]]
-    
-    # default serialization helpers
-    def deserializeFromByteRange( self ):
-        # get fh
-        fh = self.getFileHandleFromByteRange()
-        self.byteCache = fh.
-
-    def serializeToBytes( self ):
-        #get fh
-
-
+   
     def dumpTree( self, indent = 0 ):
         # debug method
         indentString = "  " * indent
         indent = indent + 2
-        print "%s%s.%s [%s->%s]" % (indentString, self.__module__, self.__class__, self.startByte, self.endByte )
+        print "%s%s [%s->%s]" % (indentString, self.__class__, self.startByte, self.endByte )
         for child in self.children:
             child.dumpTree( indent ) 
